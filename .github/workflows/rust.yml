@@ -11,12 +11,15 @@ env:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
     - name: Build
       run: cargo build --verbose
+      env:
+        SQLX_OFFLINE: true   # <-- add this
     - name: Run tests
       run: cargo test --verbose
+      env:
+        SQLX_OFFLINE: true   # <-- and here
