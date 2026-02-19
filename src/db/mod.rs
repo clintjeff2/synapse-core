@@ -3,6 +3,7 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 
 pub mod models;
 pub mod partition;
+pub mod pool_manager;
 pub mod queries;
 
 pub async fn create_pool(config: &Config) -> Result<PgPool, sqlx::Error> {
