@@ -25,15 +25,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 home = "=0.5.11"
 reqwest = { version = "0.11", features = ["json"] }
-bigdecimal = { version = "0.3", features = ["serde"] }
-async-graphql = { version = "=7.0.2", features = [
-    "chrono",
-    "uuid",
-    "bigdecimal",
-] }
-async-graphql-derive = "=7.0.2"
-async-graphql-axum = "=7.0.2"
-tokio-stream = "0.1"
+redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
 
 [dev-dependencies]
 mockito = "1"
