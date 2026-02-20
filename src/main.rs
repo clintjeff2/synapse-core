@@ -4,7 +4,7 @@ mod error;
 mod handlers;
 mod middleware;
 mod stellar;
-mod schemas;
+mod services;
 
 use axum::{Router, extract::State, routing::{get, post}, middleware as axum_middleware};
 use sqlx::migrate::Migrator; // for Migrator
@@ -103,16 +103,14 @@ async fn main() -> anyhow::Result<()> {
         ))
         .with_state(app_state.clone());
     
+    // Create DLQ routes
+    let dlq_routes = handlers::dlq::dlq_routes()
+        .with_state(app_state.db.clone());
+    
     let app = Router::new()
         .route("/health", get(handlers::health))
         .merge(webhook_routes)
-        // Settlement routes
-        .route("/settlements", get(handlers::settlements::list_settlements))
-        .route("/settlements/:id", get(handlers::settlements::get_settlement))
-        // Transaction routes
-        .route("/transactions/:id", get(handlers::webhook::get_transaction))
-        // Swagger UI
-        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .merge(dlq_routes)
         .with_state(app_state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.server_port));
