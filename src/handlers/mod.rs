@@ -7,6 +7,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+pub mod webhook;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HealthStatus {
     status: String,
