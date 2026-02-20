@@ -10,6 +10,8 @@ pub struct Config {
     pub stellar_horizon_url: String,
     pub anchor_webhook_secret: String,
 }
+
+pub mod assets;
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         dotenv().ok(); // Load .env file if present
