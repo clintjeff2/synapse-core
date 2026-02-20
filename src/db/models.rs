@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use sqlx::types::BigDecimal;
 use uuid::Uuid;
@@ -7,7 +8,7 @@ use uuid::Uuid;
 pub struct Transaction {
     pub id: Uuid,
     pub stellar_account: String,
-    pub amount: BigDecimal, // now available
+    pub amount: BigDecimal,
     pub asset_code: String,
     pub status: String,
     pub created_at: DateTime<Utc>,
@@ -15,6 +16,7 @@ pub struct Transaction {
     pub anchor_transaction_id: Option<String>,
     pub callback_type: Option<String>,
     pub callback_status: Option<String>,
+    pub settlement_id: Option<Uuid>,
 }
 
 impl Transaction {
@@ -37,35 +39,22 @@ impl Transaction {
             anchor_transaction_id,
             callback_type,
             callback_status,
+            settlement_id: None,
         }
     }
 }
 
-use serde::Deserialize;
-use serde_json::Value as JsonValue;
-use sqlx::PgPool;
-
-#[derive(Debug, Clone, Deserialize, sqlx::FromRow)]
-pub struct Asset {
-    pub id: uuid::Uuid,
+#[derive(Debug, FromRow, Serialize, Deserialize)]
+pub struct Settlement {
+    pub id: Uuid,
     pub asset_code: String,
-    pub asset_issuer: Option<String>,
-    pub metadata: JsonValue,
-    pub enabled: bool,
+    pub total_amount: BigDecimal,
+    pub tx_count: i32,
+    pub period_start: DateTime<Utc>,
+    pub period_end: DateTime<Utc>,
+    pub status: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-
-impl Asset {
-    pub async fn fetch_all(pool: &PgPool) -> anyhow::Result<Vec<Asset>> {
-        let rows = sqlx::query_as::<_, Asset>(
-            r#"SELECT id, asset_code, asset_issuer, metadata, enabled, created_at, updated_at FROM assets WHERE enabled = true"#,
-        )
-        .fetch_all(pool)
-        .await?;
-
-        Ok(rows)
-    }
 }
 #[cfg(test)]
 mod tests {
@@ -149,7 +138,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_transaction() {
-        let pool = PgPool::connect("postgres://user:password@localhost/test_db").await.unwrap();
+        let pool = PgPool::connect("postgres://user:password@localhost/test_db")
+            .await
+            .unwrap();
         let tx = Transaction::new(
             "GABCDEF".to_string(),
             BigDecimal::from(100),
@@ -158,13 +149,17 @@ mod tests {
             None,
             None,
         );
-        let inserted = crate::db::queries::insert_transaction(&pool, &tx).await.unwrap();
+        let inserted = crate::db::queries::insert_transaction(&pool, &tx)
+            .await
+            .unwrap();
         assert_eq!(inserted.stellar_account, tx.stellar_account);
     }
 
     #[tokio::test]
     async fn test_get_transaction() {
-        let pool = PgPool::connect("postgres://user:password@localhost/test_db").await.unwrap();
+        let pool = PgPool::connect("postgres://user:password@localhost/test_db")
+            .await
+            .unwrap();
         let tx = Transaction::new(
             "GABCDEF".to_string(),
             BigDecimal::from(100),
@@ -173,14 +168,20 @@ mod tests {
             None,
             None,
         );
-        let inserted = crate::db::queries::insert_transaction(&pool, &tx).await.unwrap();
-        let fetched = crate::db::queries::get_transaction(&pool, inserted.id).await.unwrap();
+        let inserted = crate::db::queries::insert_transaction(&pool, &tx)
+            .await
+            .unwrap();
+        let fetched = crate::db::queries::get_transaction(&pool, inserted.id)
+            .await
+            .unwrap();
         assert_eq!(fetched.id, inserted.id);
     }
 
     #[tokio::test]
     async fn test_list_transactions() {
-        let pool = PgPool::connect("postgres://user:password@localhost/test_db").await.unwrap();
+        let pool = PgPool::connect("postgres://user:password@localhost/test_db")
+            .await
+            .unwrap();
         for i in 0..5 {
             let tx = Transaction::new(
                 format!("GABCDEF_{}", i),
@@ -190,10 +191,13 @@ mod tests {
                 None,
                 None,
             );
-            crate::db::queries::insert_transaction(&pool, &tx).await.unwrap();
+            crate::db::queries::insert_transaction(&pool, &tx)
+                .await
+                .unwrap();
         }
-        let transactions = crate::db::queries::list_transactions(&pool, 5, 0).await.unwrap();
+        let transactions = crate::db::queries::list_transactions(&pool, 5, 0)
+            .await
+            .unwrap();
         assert_eq!(transactions.len(), 5);
     }
 }
-
