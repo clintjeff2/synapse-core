@@ -8,7 +8,7 @@ use uuid::Uuid;
 pub struct Transaction {
     pub id: Uuid,
     pub stellar_account: String,
-    pub amount: BigDecimal, // now available
+    pub amount: BigDecimal,
     pub asset_code: String,
     pub status: String,
     pub created_at: DateTime<Utc>,

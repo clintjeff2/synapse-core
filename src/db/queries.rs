@@ -27,7 +27,20 @@ pub async fn insert_transaction(pool: &PgPool, tx: &Transaction) -> Result<Trans
     .bind(&tx.callback_status)
     .bind(tx.settlement_id)
     .fetch_one(pool)
-    .await
+    .await?;
+
+    Ok(Transaction {
+        id: row.get("id"),
+        stellar_account: row.get("stellar_account"),
+        amount: row.get("amount"),
+        asset_code: row.get("asset_code"),
+        status: row.get("status"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+        anchor_transaction_id: row.get("anchor_transaction_id"),
+        callback_type: row.get("callback_type"),
+        callback_status: row.get("callback_status"),
+    })
 }
 
 pub async fn get_transaction(pool: &PgPool, id: Uuid) -> Result<Transaction> {
