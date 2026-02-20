@@ -1,12 +1,19 @@
-use sqlx::{PgPool, Result, Row};
-use crate::db::models::Transaction;
+use sqlx::{PgPool, Result, Postgres, Transaction as SqlxTransaction};
+use crate::db::models::{Transaction, Settlement};
 use uuid::Uuid;
+use chrono::{DateTime, Utc};
+
+// --- Transaction Queries ---
 
 pub async fn insert_transaction(pool: &PgPool, tx: &Transaction) -> Result<Transaction> {
-    let row = sqlx::query(
-        "INSERT INTO transactions (id, stellar_account, amount, asset_code, status, created_at, updated_at, anchor_transaction_id, callback_type, callback_status) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
-         RETURNING id, stellar_account, amount, asset_code, status, created_at, updated_at, anchor_transaction_id, callback_type, callback_status"
+    sqlx::query_as::<_, Transaction>(
+        r#"
+        INSERT INTO transactions (
+            id, stellar_account, amount, asset_code, status,
+            created_at, updated_at, anchor_transaction_id, callback_type, callback_status, settlement_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        RETURNING *
+        "#
     )
     .bind(tx.id)
     .bind(&tx.stellar_account)
@@ -18,6 +25,7 @@ pub async fn insert_transaction(pool: &PgPool, tx: &Transaction) -> Result<Trans
     .bind(&tx.anchor_transaction_id)
     .bind(&tx.callback_type)
     .bind(&tx.callback_status)
+    .bind(tx.settlement_id)
     .fetch_one(pool)
     .await?;
 
@@ -36,53 +44,108 @@ pub async fn insert_transaction(pool: &PgPool, tx: &Transaction) -> Result<Trans
 }
 
 pub async fn get_transaction(pool: &PgPool, id: Uuid) -> Result<Transaction> {
-    let row = sqlx::query(
-        "SELECT id, stellar_account, amount, asset_code, status, created_at, updated_at, anchor_transaction_id, callback_type, callback_status 
-         FROM transactions WHERE id = $1"
-    )
-    .bind(id)
-    .fetch_one(pool)
-    .await?;
-
-    Ok(Transaction {
-        id: row.get("id"),
-        stellar_account: row.get("stellar_account"),
-        amount: row.get("amount"),
-        asset_code: row.get("asset_code"),
-        status: row.get("status"),
-        created_at: row.get("created_at"),
-        updated_at: row.get("updated_at"),
-        anchor_transaction_id: row.get("anchor_transaction_id"),
-        callback_type: row.get("callback_type"),
-        callback_status: row.get("callback_status"),
-    })
+    sqlx::query_as::<_, Transaction>("SELECT * FROM transactions WHERE id = $1")
+        .bind(id)
+        .fetch_one(pool)
+        .await
 }
 
 pub async fn list_transactions(pool: &PgPool, limit: i64, offset: i64) -> Result<Vec<Transaction>> {
-    let rows = sqlx::query(
-        "SELECT id, stellar_account, amount, asset_code, status, created_at, updated_at, anchor_transaction_id, callback_type, callback_status 
-         FROM transactions ORDER BY created_at DESC LIMIT $1 OFFSET $2"
+    sqlx::query_as::<_, Transaction>("SELECT * FROM transactions ORDER BY created_at DESC LIMIT $1 OFFSET $2")
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await
+}
+
+pub async fn get_unsettled_transactions(
+    executor: &mut SqlxTransaction<'_, Postgres>,
+    asset_code: &str,
+    end_time: DateTime<Utc>,
+) -> Result<Vec<Transaction>> {
+    sqlx::query_as::<_, Transaction>(
+        r#"
+        SELECT * FROM transactions
+        WHERE status = 'completed'
+        AND settlement_id IS NULL
+        AND asset_code = $1
+        AND updated_at <= $2
+        FOR UPDATE
+        "#
     )
-    .bind(limit)
-    .bind(offset)
+    .bind(asset_code)
+    .bind(end_time)
+    .fetch_all(&mut **executor)
+    .await
+}
+
+pub async fn update_transactions_settlement(
+    executor: &mut SqlxTransaction<'_, Postgres>,
+    tx_ids: &[Uuid],
+    settlement_id: Uuid,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE transactions SET settlement_id = $1, updated_at = NOW() WHERE id = ANY($2)"
+    )
+    .bind(settlement_id)
+    .bind(tx_ids)
+    .execute(&mut **executor)
+    .await?;
+    
+    Ok(())
+}
+
+// --- Settlement Queries ---
+
+pub async fn insert_settlement(
+    executor: &mut SqlxTransaction<'_, Postgres>,
+    settlement: &Settlement,
+) -> Result<Settlement> {
+    sqlx::query_as::<_, Settlement>(
+        r#"
+        INSERT INTO settlements (
+            id, asset_code, total_amount, tx_count, period_start, period_end, status, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING *
+        "#
+    )
+    .bind(settlement.id)
+    .bind(&settlement.asset_code)
+    .bind(&settlement.total_amount)
+    .bind(settlement.tx_count)
+    .bind(settlement.period_start)
+    .bind(settlement.period_end)
+    .bind(&settlement.status)
+    .bind(settlement.created_at)
+    .bind(settlement.updated_at)
+    .fetch_one(&mut **executor)
+    .await
+}
+
+pub async fn get_settlement(pool: &PgPool, id: Uuid) -> Result<Settlement> {
+    sqlx::query_as::<_, Settlement>("SELECT * FROM settlements WHERE id = $1")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+}
+
+pub async fn list_settlements(pool: &PgPool, limit: i64, offset: i64) -> Result<Vec<Settlement>> {
+    sqlx::query_as::<_, Settlement>("SELECT * FROM settlements ORDER BY created_at DESC LIMIT $1 OFFSET $2")
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await
+}
+
+pub async fn get_unique_assets_to_settle(pool: &PgPool) -> Result<Vec<String>> {
+    let rows = sqlx::query(
+        "SELECT DISTINCT asset_code FROM transactions WHERE status = 'completed' AND settlement_id IS NULL"
+    )
     .fetch_all(pool)
     .await?;
-
-    let mut transactions = Vec::new();
-    for row in rows {
-        transactions.push(Transaction {
-            id: row.get("id"),
-            stellar_account: row.get("stellar_account"),
-            amount: row.get("amount"),
-            asset_code: row.get("asset_code"),
-            status: row.get("status"),
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
-            anchor_transaction_id: row.get("anchor_transaction_id"),
-            callback_type: row.get("callback_type"),
-            callback_status: row.get("callback_status"),
-        });
-    }
-
-    Ok(transactions)
+    
+    Ok(rows.into_iter().map(|r| {
+        use sqlx::Row;
+        r.get:: <String, _>("asset_code")
+    }).collect())
 }
