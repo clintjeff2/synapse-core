@@ -5,6 +5,7 @@ mod handlers;
 mod middleware;
 mod stellar;
 mod services;
+mod utils;
 
 use axum::{Router, extract::State, routing::{get, post}, middleware as axum_middleware};
 use http::header::HeaderValue;
@@ -125,6 +126,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(handlers::health))
         .merge(webhook_routes)
         .merge(dlq_routes)
+        .layer(axum_middleware::from_fn(middleware::request_logger::request_logger_middleware))
         .layer(cors_layer)
         .with_state(app_state);
 
