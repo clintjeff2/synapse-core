@@ -7,6 +7,8 @@ pub mod stellar;
 pub mod graphql;
 pub mod schemas;
 pub mod middleware;
+pub mod startup;
+pub mod utils;
 
 use axum::{Router, routing::{get, post}};
 use crate::stellar::HorizonClient;
