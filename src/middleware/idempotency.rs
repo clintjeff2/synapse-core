@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
-    extract::{Request, State},
-    http::StatusCode,
+    extract::State,
+    http::{Request, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
     Json,
@@ -93,8 +93,8 @@ pub enum IdempotencyStatus {
 /// Middleware to handle idempotency for webhook requests
 pub async fn idempotency_middleware(
     State(service): State<IdempotencyService>,
-    request: Request,
-    next: Next,
+    request: Request<Body>,
+    next: Next<Body>,
 ) -> Response {
     // Extract idempotency key from request
     // This could be from headers, query params, or body
@@ -122,7 +122,7 @@ pub async fn idempotency_middleware(
     match service.check_idempotency(&idempotency_key).await {
         Ok(IdempotencyStatus::New) => {
             // Process the request
-            let response = next.run(request).await;
+            let response: Response = next.run(request).await;
 
             // If successful (2xx), cache the response
             if response.status().is_success() {
