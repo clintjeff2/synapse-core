@@ -35,7 +35,8 @@ async fn process_batch(pool: &PgPool, horizon_client: &HorizonClient) -> anyhow:
     let pending: Vec<Transaction> = sqlx::query_as::<_, Transaction>(
         r#"
         SELECT id, stellar_account, amount, asset_code, status, created_at, updated_at,
-               anchor_transaction_id, callback_type, callback_status, settlement_id
+               anchor_transaction_id, callback_type, callback_status, settlement_id,
+               memo, memo_type, metadata
         FROM transactions
         WHERE status = 'pending'
         ORDER BY created_at ASC
