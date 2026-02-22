@@ -1,36 +1,13 @@
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    Json,
-};
-use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
-
-pub mod webhook;
-pub mod graphql;
+pub mod export;
 pub mod settlements;
+pub mod webhook;
 pub mod dlq;
 pub mod admin;
 
-
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct HealthStatus {
-    status: String,
-    version: String,
-    db: String,
-    db_pool: DbPoolStats,
-}
-
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct DbPoolStats {
-    active_connections: u32,
-    idle_connections: u32,
-    max_connections: u32,
-    usage_percent: f32,
-}
-
-use crate::ApiState;
+use crate::AppState;
+use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 #[utoipa::path(
     get,
@@ -81,8 +58,4 @@ pub async fn health(State(state): State<ApiState>) -> impl IntoResponse {
     };
 
     (status_code, Json(health_response))
-}
-
-pub async fn callback_transaction(State(_state): State<ApiState>) -> impl IntoResponse {
-    StatusCode::NOT_IMPLEMENTED
 }

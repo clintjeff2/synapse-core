@@ -8,6 +8,31 @@ use synapse_core::{
 use axum::{Router, routing::{get, post}, middleware as axum_middleware};
 use axum::http::header::HeaderValue;
 use sqlx::migrate::Migrator;
+mod cli;
+mod config;
+mod db;
+mod error;
+mod handlers;
+mod health;
+mod metrics;
+mod middleware;
+mod services;
+mod stellar;
+mod validation;
+
+use axum::{
+    Router, 
+    routing::get,
+    middleware as axum_middleware,
+    middleware::Next,
+    extract::Request,
+    response::Response,
+    http::HeaderMap,
+    http::StatusCode,
+    response::IntoResponse,
+    extract::ConnectInfo,
+};
+use sqlx::migrate::Migrator;
 use tower_http::cors::{CorsLayer, AllowOrigin};
 use std::net::SocketAddr;
 use std::path::Path;
@@ -55,66 +80,130 @@ pub struct ApiDoc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
     let config = config::Config::from_env()?;
 
     // Setup logging
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    let env_filter =
+        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+    match config.log_format {
+        config::LogFormat::Json => {
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(tracing_subscriber::fmt::layer().json())
+                .init();
+        }
+        config::LogFormat::Text => {
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(tracing_subscriber::fmt::layer())
+                .init();
+        }
+    }
 
-    // Check for --dry-run flag
-    let args: Vec<String> = std::env::args().collect();
-    let dry_run = args.contains(&"--dry-run".to_string());
+    match cli.command {
+        Some(Commands::Serve) | None => serve(config).await,
+        Some(Commands::Tx(tx_cmd)) => match tx_cmd {
+            TxCommands::ForceComplete { tx_id } => {
+                let pool = db::create_pool(&config).await?;
+                cli::handle_tx_force_complete(&pool, tx_id).await
+            }
+        },
+        Some(Commands::Db(db_cmd)) => match db_cmd {
+            DbCommands::Migrate => cli::handle_db_migrate(&config).await,
+        },
+        Some(Commands::Config) => cli::handle_config_validate(&config),
+    }
+}
 
-    // Database pool
+async fn serve(config: config::Config) -> anyhow::Result<()> {
     let pool = db::create_pool(&config).await?;
+
+    // Initialize pool manager for multi-region failover
+    let pool_manager = PoolManager::new(
+        &config.database_url,
+        config.database_replica_url.as_deref(),
+    )
+    .await?;
+    
+    if pool_manager.replica().is_some() {
+        tracing::info!("Database replica configured - read queries will be routed to replica");
+    } else {
+        tracing::info!("No replica configured - all queries will use primary database");
+    }
 
     // Run migrations
     let migrator = Migrator::new(Path::new("./migrations")).await?;
     migrator.run(&pool).await?;
     tracing::info!("Database migrations completed");
 
-    // Run startup validation
-    let report = startup::validate_environment(&config, &pool).await?;
-    
-    if dry_run {
-        report.print();
-        std::process::exit(if report.is_valid() { 0 } else { 1 });
-    }
-    
-    if !report.is_valid() {
-        report.print();
-        anyhow::bail!("Startup validation failed");
-    }
-    
-    tracing::info!("✅ All startup checks passed");
+    // Initialize partition manager (runs every 24 hours)
+    let partition_manager = db::partition::PartitionManager::new(pool.clone(), 24);
+    partition_manager.start();
+    tracing::info!("Partition manager started");
 
     // Initialize Stellar Horizon client
     let horizon_client = HorizonClient::new(config.stellar_horizon_url.clone());
-    tracing::info!("Stellar Horizon client initialized with URL: {}", config.stellar_horizon_url);
+    tracing::info!(
+        "Stellar Horizon client initialized with URL: {}",
+        config.stellar_horizon_url
+    );
+
+    // Initialize Settlement Service
+    let settlement_service = SettlementService::new(pool.clone());
+    
+    // Start background settlement worker
+    let settlement_pool = pool.clone();
+    tokio::spawn(async move {
+        let service = SettlementService::new(settlement_pool);
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600)); // Default to hourly
+        loop {
+            interval.tick().await;
+            tracing::info!("Running scheduled settlement job...");
+            match service.run_settlements().await {
+                Ok(results) => {
+                    if !results.is_empty() {
+                        tracing::info!("Successfully generated {} settlements", results.len());
+                    }
+                }
+                Err(e) => tracing::error!("Scheduled settlement job failed: {:?}", e),
+            }
+        }
+    });
+
+    // Initialize metrics
+    let metrics_handle = metrics::init_metrics()
+        .map_err(|e| anyhow::anyhow!("Failed to initialize metrics: {}", e))?;
+    tracing::info!("Metrics initialized successfully");
+
+    // Initialize rate limiting
+    let rate_limit_config = Arc::new(RateLimitConfig::new(&config));
+    
+    // Load whitelisted IPs from config
+    if !config.whitelisted_ips.is_empty() {
+        rate_limit_config.load_whitelisted_ips(&config.whitelisted_ips).await;
+    }
+    
+    tracing::info!("Rate limiting configured: {} req/sec (default), {} req/sec (whitelisted)", 
+                   config.default_rate_limit, config.whitelist_rate_limit);
 
     // Initialize Redis idempotency service
     let idempotency_service = IdempotencyService::new(&config.redis_url)?;
     tracing::info!("Redis idempotency service initialized");
 
-    // Build CORS layer from configurable origins
-    let cors_layer = match &config.cors_allowed_origins {
-        Some(origins) => {
-            let origins: Vec<HeaderValue> = origins
-                .split(',')
-                .filter_map(|s| s.trim().parse().ok())
-                .collect();
-            CorsLayer::new().allow_origin(AllowOrigin::list(origins))
-        }
-        None => CorsLayer::permissive(), // Allow any origin when not configured (dev default)
-    };
+    // Create broadcast channel for WebSocket notifications
+    // Channel capacity of 100 - slow clients will miss old messages (backpressure handling)
+    let (tx_broadcast, _) = broadcast::channel::<TransactionStatusUpdate>(100);
+    tracing::info!("WebSocket broadcast channel initialized");
+
+    // Initialize feature flags service
+    let feature_flags = FeatureFlagService::new(pool.clone());
+    tracing::info!("Feature flags service initialized");
 
     let monitor_pool = pool.clone();
     let app_state = AppState {
-        db: pool,
+        db: pool.clone(),
+        pool_manager,
         horizon_client,
     };
 
@@ -142,8 +231,8 @@ async fn main() -> anyhow::Result<()> {
     let webhook_routes = Router::new()
         .route("/webhook", post(handlers::webhook::handle_webhook))
         .layer(axum_middleware::from_fn_with_state(
-            idempotency_service.clone(),
-            middleware::idempotency::idempotency_middleware,
+            config.clone(),
+            metrics::metrics_auth_middleware,
         ))
         .with_state(api_state.clone());
 
