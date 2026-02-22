@@ -1,6 +1,5 @@
 use anyhow::Result;
 use dotenvy::dotenv;
-use ipnet::IpNet;
 use serde::Deserialize;
 use std::env;
 

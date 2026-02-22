@@ -9,6 +9,7 @@ mod validation;
 
 use axum::{Router, routing::get};
 use sqlx::migrate::Migrator; // for Migrator
+use tower_http::cors::{CorsLayer, AllowOrigin};
 use std::net::SocketAddr; // for SocketAddr
 use std::path::Path; // for Path
 use stellar::HorizonClient;
@@ -304,6 +305,16 @@ async fn serve(config: config::Config) -> anyhow::Result<()> {
         ))
         .with_state(metrics_state);
     
+    // Create DLQ routes
+    let dlq_routes = handlers::dlq::dlq_routes()
+        .with_state(app_state.db.clone());
+    
+    // Create Admin routes with auth middleware
+    let admin_routes = Router::new()
+        .nest("/admin/queue", handlers::admin::admin_routes())
+        .layer(axum_middleware::from_fn(middleware::auth::admin_auth))
+        .with_state(app_state.db.clone());
+
     let app = Router::new()
         .route("/health", get(handlers::health))
         .route("/settlements", get(handlers::settlements::list_settlements))
@@ -313,6 +324,7 @@ async fn serve(config: config::Config) -> anyhow::Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], config.server_port));
     tracing::info!("Server listening on {}", addr);
 
+    // Handle graceful shutdown
     let listener = TcpListener::bind(addr).await?;
     axum::serve(
         listener,
@@ -321,4 +333,38 @@ async fn serve(config: config::Config) -> anyhow::Result<()> {
     .await?;
 
     Ok(())
+}
+
+
+/// Background task to monitor database connection pool usage
+async fn pool_monitor_task(pool: sqlx::PgPool) {
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+    
+    loop {
+        interval.tick().await;
+        
+        let active = pool.size();
+        let idle = pool.num_idle();
+        let max = pool.options().get_max_connections();
+        let usage_percent = (active as f32 / max as f32) * 100.0;
+        
+        // Log warning if pool usage exceeds 80%
+        if usage_percent >= 80.0 {
+            tracing::warn!(
+                "Database connection pool usage high: {:.1}% ({}/{} connections active, {} idle)",
+                usage_percent,
+                active,
+                max,
+                idle
+            );
+        } else {
+            tracing::debug!(
+                "Database connection pool status: {:.1}% ({}/{} connections active, {} idle)",
+                usage_percent,
+                active,
+                max,
+                idle
+            );
+        }
+    }
 }

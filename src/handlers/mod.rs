@@ -3,12 +3,18 @@ pub mod export;
 use crate::AppState;
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 pub mod settlements;
 pub mod webhook;
 pub mod settlements;
+pub mod graphql;
+pub mod settlements;
+pub mod dlq;
+pub mod admin;
 
-#[derive(Debug, Serialize, Deserialize)]
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct HealthStatus {
     status: String,
     version: String,
@@ -44,6 +50,6 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
     (status_code, Json(health_response))
 }
 
-pub async fn callback_transaction(State(_state): State<AppState>) -> impl IntoResponse {
+pub async fn callback_transaction(State(_state): State<ApiState>) -> impl IntoResponse {
     StatusCode::NOT_IMPLEMENTED
 }

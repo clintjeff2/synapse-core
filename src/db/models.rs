@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use sqlx::types::BigDecimal;
 use uuid::Uuid;
+use utoipa::ToSchema;
 
 #[derive(Debug, FromRow, Serialize, Deserialize)]
 pub struct Transaction {
@@ -48,6 +49,7 @@ impl Transaction {
 pub struct Settlement {
     pub id: Uuid,
     pub asset_code: String,
+    #[serde(with = "bigdecimal_serde")]
     pub total_amount: BigDecimal,
     pub tx_count: i32,
     pub period_start: DateTime<Utc>,
@@ -55,6 +57,23 @@ pub struct Settlement {
     pub status: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow, Serialize, Deserialize)]
+pub struct TransactionDlq {
+    pub id: Uuid,
+    pub transaction_id: Uuid,
+    pub stellar_account: String,
+    #[serde(with = "bigdecimal_serde")]
+    pub amount: BigDecimal,
+    pub asset_code: String,
+    pub anchor_transaction_id: Option<String>,
+    pub error_reason: String,
+    pub stack_trace: Option<String>,
+    pub retry_count: i32,
+    pub original_created_at: DateTime<Utc>,
+    pub moved_to_dlq_at: DateTime<Utc>,
+    pub last_retry_at: Option<DateTime<Utc>>,
 }
 #[cfg(test)]
 mod tests {

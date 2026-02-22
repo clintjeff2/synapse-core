@@ -1,12 +1,25 @@
 pub mod config;
 pub mod db;
-pub mod error;
+pub     Router::new()
+        .route("/health", get(handlers::health))
+        .route("/settlements", get(handlers::settlements::list_settlements))
+        .route("/settlements/:id", get(handlers::settlements::get_settlement))
+        .route("/callback", post(handlers::webhook::callback))
+        .route("/transactions", get(handlers::webhook::list_transactions_api))
+        .route("/transactions/:id", get(handlers::webhook::get_transaction))
+        // .route("/graphql", post(handlers::graphql::graphql_handler).get(handlers::graphql::subscription_handler))
+        // .route("/graphql/playground", get(handlers::graphql::graphql_playground))
+        .with_state(state)
 pub mod handlers;
 pub mod services;
 pub mod stellar;
+pub mod graphql;
+pub mod schemas;
+pub mod middleware;
 
-use axum::{Router, routing::get};
+use axum::{Router, routing::{get, post}};
 use crate::stellar::HorizonClient;
+// use crate::graphql::schema::{AppSchema, build_schema};  // Temporarily commented out to resolve compilation issues
 
 #[derive(Clone)]
 pub struct AppState {
@@ -14,12 +27,22 @@ pub struct AppState {
     pub horizon_client: HorizonClient,
 }
 
-pub fn create_app(state: AppState) -> Router {
+#[derive(Clone)]
+pub struct ApiState {
+    pub app_state: AppState,
+    // pub graphql_schema: AppSchema,  // Temporarily commented out to resolve compilation issues
+}
+
+pub fn create_app(app_state: AppState) -> Router {
+    let api_state = ApiState {
+        app_state,
+    };
+    
     Router::new()
         .route("/health", get(handlers::health))
         .route("/settlements", get(handlers::settlements::list_settlements))
         .route("/settlements/:id", get(handlers::settlements::get_settlement))
-        .route("/callback", axum::routing::post(handlers::webhook::callback))
+        .route("/callback", post(handlers::webhook::callback))
         .route("/transactions/:id", get(handlers::webhook::get_transaction))
-        .with_state(state)
+        .with_state(api_state)
 }

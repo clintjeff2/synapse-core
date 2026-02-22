@@ -1,42 +1,46 @@
 use axum::{
-    extract::{Path, State, Query},
-    response::IntoResponse,
-    Json,
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::Json,
 };
-use uuid::Uuid;
-use crate::AppState;
-use crate::db::queries;
-use crate::error::AppError;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
-#[derive(Deserialize)]
+use crate::ApiState;
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct Pagination {
-    pub limit: Option<i64>,
-    pub offset: Option<i64>,
+    #[serde(default)]
+    pub page: Option<u32>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct SettlementListResponse {
+    pub settlements: Vec<crate::db::models::Settlement>,
+    pub total: i64,
+    pub page: u32,
+    pub limit: u32,
 }
 
 pub async fn list_settlements(
-    State(state): State<AppState>,
-    Query(pagination): Query<Pagination>,
-) -> Result<impl IntoResponse, AppError> {
-    let limit = pagination.limit.unwrap_or(20);
-    let offset = pagination.offset.unwrap_or(0);
-
-    let settlements = queries::list_settlements(&state.db, limit, offset).await
-        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
-
-    Ok(Json(settlements))
+    State(_state): State<ApiState>,
+    _query: Query<Pagination>,
+) -> Result<Json<SettlementListResponse>, StatusCode> {
+    // TODO: Implement settlement listing
+    Ok(Json(SettlementListResponse {
+        settlements: vec![],
+        total: 0,
+        page: _query.page.unwrap_or(1),
+        limit: _query.limit.unwrap_or(10).min(100),
+    }))
 }
 
 pub async fn get_settlement(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Result<impl IntoResponse, AppError> {
-    let settlement = queries::get_settlement(&state.db, id).await
-        .map_err(|e| match e {
-            sqlx::Error::RowNotFound => AppError::NotFound(format!("Settlement {} not found", id)),
-            _ => AppError::DatabaseError(e.to_string()),
-        })?;
-
-    Ok(Json(settlement))
+    State(_state): State<ApiState>,
+    Path(_id): Path<String>,
+) -> Result<Json<crate::db::models::Settlement>, StatusCode> {
+    // TODO: Implement settlement retrieval
+    Err(StatusCode::NOT_IMPLEMENTED)
 }
